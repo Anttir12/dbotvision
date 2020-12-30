@@ -1,0 +1,8 @@
+
+# Check README for python-opencv instalation
+#python-opencv
+numpy==1.19.4
+matplotlib==3.3.3
+mss==6.1.0
+pytesseract==0.3.7
+imutils==0.5.3
