@@ -1,7 +1,3 @@
-uploads/
-discobot/soundeffects/
-dbot/.env
-
 # Byte-compiled / optimized / DLL files
 **/__pycache__/
 
@@ -107,7 +103,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-dbot/.env
+.env
 .venv
 env/
 venv/
@@ -139,4 +135,3 @@ dmypy.json
 .bot_data/
 game_file.json
 global_settings.json
-

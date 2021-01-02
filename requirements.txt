@@ -6,3 +6,5 @@ matplotlib==3.3.3
 mss==6.1.0
 pytesseract==0.3.7
 imutils==0.5.3
+python-dotenv==0.15.0
+requests==2.25.1
