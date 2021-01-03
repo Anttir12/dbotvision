@@ -176,6 +176,8 @@ class KillFeedAnalyzer:
                 (self.act_instantly or time() > self.killfeed_clear_time):
             for key, kill_count in self.multikilldetection.items():
                 team, hero = key.split(" ")
+                if kill_count > 6:
+                    kill_count = 6
                 if self.api_client and f"{key}{kill_count}" not in self.short_event_history:
                     if kill_count > 1:
                         if team == "red":
