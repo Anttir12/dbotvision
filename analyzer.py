@@ -28,7 +28,7 @@ class KillFeedAnalyzer:
     }
 
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
-                 combo_cutoff=2):
+                 combo_cutoff=2, threshold=0.75):
         self.color = (0, 255, 0)
         self.width = 66
         self.height = 46
@@ -42,6 +42,7 @@ class KillFeedAnalyzer:
         self.api_client: DbotApiClient = api_client
         self.act_instantly = act_instantly
         self.print_killfeed = print_killfeed
+        self.threshold = threshold
 
     def start_analyzer(self):
         with mss() as sct:
@@ -88,14 +89,15 @@ class KillFeedAnalyzer:
                     action = Action.RESSED
                 else:
                     action = Action.KILLED
-                kfl = KillFeedLine(hero_left=left, hero_right=right, timestamp=timestamp, action=action)
-                if kfl not in self.killfeed:
-                    self.killfeed.append(kfl)
-                    if kfl.action == Action.KILLED:
-                        self.multikilldetection[str(kfl.hero_left)] += 1
-                        self.update_multikillcutoff()
-                    if self.print_killfeed:
-                        logger.info(kfl)
+                if not (left.team == right.team and left.hero != Hero.MERCY):
+                    kfl = KillFeedLine(hero_left=left, hero_right=right, timestamp=timestamp, action=action)
+                    if kfl not in self.killfeed:
+                        self.killfeed.append(kfl)
+                        if kfl.action == Action.KILLED:
+                            self.multikilldetection[str(kfl.hero_left)] += 1
+                            self.update_multikillcutoff()
+                        if self.print_killfeed:
+                            logger.info(kfl)
                 prev = None
 
         while self.killfeed and timestamp - self.killfeed[0].timestamp > 10:
@@ -106,14 +108,13 @@ class KillFeedAnalyzer:
 
     def analyze_image(self, img_rgb, thread_count):
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-        threshold = 0.85
         heroes_found = list()
         chunks = self._chunkify_list(list(h_icons.items()), thread_count)
         tpool = ThreadPool(processes=thread_count)
         threads = list()
         for chunk in chunks:
             img_copy = img_rgb.copy()
-            res = tpool.apply_async(self.find_heroes, (chunk, img_copy, img_gray, threshold))
+            res = tpool.apply_async(self.find_heroes, (chunk, img_copy, img_gray, self.threshold))
             threads.append(res)
         for t in threads:
             heroes_found.extend(t.get())

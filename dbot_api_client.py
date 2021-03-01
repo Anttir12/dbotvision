@@ -44,15 +44,15 @@ class DbotApiClient:
     def send_ow_event(self, hero: str, event: str, team: str):
         logger.debug(f"Sending event {event} {team} {hero}")
         response = self._post(self.base_url + "bot/ow_event",
-                              json={"hero": hero, "event": event, "team": team},
-                              headers={'Authorization': 'Bearer {}'.format(self.access)})
+                              json={"hero": hero, "event": event, "team": team})
         if not (200 <= response.status_code < 300):
             logger.error(f"send_ow_event returned response code {response.status_code}")
             logger.error(response.content)
 
+    # smelly. make better
     def _post(self, url, **kwargs):
-        response = requests.post(url, **kwargs)
+        response = requests.post(url, headers={'Authorization': 'Bearer {}'.format(self.access)}, **kwargs)
         if response.status_code == 401 and response.json().get("code") == "token_not_valid":
             if self._refresh_access_token():
-                response = requests.post(url, **kwargs)
+                response = requests.post(url, headers={'Authorization': 'Bearer {}'.format(self.access)}, **kwargs)
         return response
