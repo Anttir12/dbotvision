@@ -1,6 +1,7 @@
 from collections import deque, Counter
 from multiprocessing.pool import ThreadPool
 from time import time
+from typing import Dict, Any
 
 import cv2
 import logging
@@ -11,8 +12,10 @@ from dbot_api_client import DbotApiClient
 from enums import Hero, Team, Action
 from killfeed import KillFeedItem, KillFeedLine
 
-h_icons = {hero: cv2.cvtColor(cv2.imread("ow_icons/{}.png".format(hero.value.lower())), cv2.COLOR_BGR2GRAY) for hero in
-           Hero}
+h_icons: Dict[Hero, Any] = dict()
+for hero in Hero:
+    #print(f"Hero: {hero}")
+    h_icons[hero] = cv2.cvtColor(cv2.imread("ow_icons/{}.png".format(hero.value.lower())), cv2.COLOR_BGR2GRAY)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +31,7 @@ class KillFeedAnalyzer:
     }
 
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
-                 combo_cutoff=2, threshold=0.75):
+                 combo_cutoff=2, threshold=0.78):
         self.color = (0, 255, 0)
         self.width = 66
         self.height = 46
@@ -51,7 +54,7 @@ class KillFeedAnalyzer:
             h = 448
             monitor = {
                 "top": mon["top"] + 45,
-                "left": mon["left"] + 2520 - w,
+                "left": mon["left"] + 3820 - w,
                 "width": w,
                 "height": h,
                 "mon": 1,
@@ -60,8 +63,8 @@ class KillFeedAnalyzer:
                 if self.debug:
                     start = time()
                 img = np.array(sct.grab(monitor))
-                # img = cv2.imread("test_images/test1.png")
-                # img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+                img = cv2.imread("test_images/double_kill.jpg")
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
                 self.update_killfeed(img)
                 self.analyze_killfeed()
                 if self.debug:
@@ -104,7 +107,7 @@ class KillFeedAnalyzer:
             self.killfeed.popleft()
         if self.show_debug_img:
             cv2.imshow("Matched image", img)
-            cv2.waitKey(5)
+            cv2.waitKey(1)
 
     def analyze_image(self, img_rgb, thread_count):
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
