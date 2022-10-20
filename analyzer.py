@@ -31,7 +31,7 @@ class KillFeedAnalyzer:
     }
 
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
-                 combo_cutoff=2, threshold=0.78):
+                 combo_cutoff=2, threshold=0.74):
         self.color = (0, 255, 0)
         self.width = 66
         self.height = 46
@@ -63,15 +63,15 @@ class KillFeedAnalyzer:
                 if self.debug:
                     start = time()
                 img = np.array(sct.grab(monitor))
-                img = cv2.imread("test_images/double_kill.jpg")
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+                #img = cv2.imread("test_images/supermegakill.jpg")
+                #img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
                 self.update_killfeed(img)
                 self.analyze_killfeed()
                 if self.debug:
                     logger.debug(f"Analyzing image took {time()-start} seconds")
 
     def update_killfeed(self, img):
-        heroes_found = self.analyze_image(img, 4)
+        heroes_found = self.analyze_image(img, 6)
         timestamp = time()
         prev = None
         for i, kf_item in enumerate(heroes_found):
@@ -132,6 +132,8 @@ class KillFeedAnalyzer:
         for hero, template in hero_icons:
             mask_num += 1
             res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
+            if self.debug:
+                logger.debug(f"Best match for hero {hero} is {str(res.max())}")
 
             loc = np.where(res >= threshold)
             mask = np.zeros(img_gray.shape[:2], np.uint8)
