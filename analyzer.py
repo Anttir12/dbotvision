@@ -15,7 +15,9 @@ from killfeed import KillFeedItem, KillFeedLine
 h_icons: Dict[Hero, Any] = dict()
 for hero in Hero:
     #print(f"Hero: {hero}")
-    h_icons[hero] = cv2.cvtColor(cv2.imread("ow_icons/{}.png".format(hero.value.lower())), cv2.COLOR_BGR2GRAY)
+    hero_icon = cv2.cvtColor(cv2.imread("icons_with_mask/{}.png".format(hero.value.lower())), cv2.COLOR_BGR2GRAY)
+    icon_mask = cv2.cvtColor(cv2.imread("icons_with_mask/{}_mask.png".format(hero.value.lower())), cv2.COLOR_BGR2GRAY)
+    h_icons[hero] = (hero_icon, icon_mask)
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ class KillFeedAnalyzer:
     }
 
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
-                 combo_cutoff=2, threshold=0.74):
+                 combo_cutoff=2, threshold=0.80):
         self.color = (0, 255, 0)
         self.width = 66
         self.height = 46
@@ -46,14 +48,16 @@ class KillFeedAnalyzer:
         self.act_instantly = act_instantly
         self.print_killfeed = print_killfeed
         self.threshold = threshold
+        self.font = cv2.FONT_HERSHEY_SIMPLEX
+
 
     def start_analyzer(self):
         with mss() as sct:
             mon = sct.monitors[1]
-            w = 640
-            h = 448
+            w = 550
+            h = 450
             monitor = {
-                "top": mon["top"] + 45,
+                "top": mon["top"] + 15,
                 "left": mon["left"] + 3820 - w,
                 "width": w,
                 "height": h,
@@ -63,19 +67,24 @@ class KillFeedAnalyzer:
                 if self.debug:
                     start = time()
                 img = np.array(sct.grab(monitor))
-                #img = cv2.imread("test_images/supermegakill.jpg")
+                #img = cv2.imread("test_images/hook.jpg")
                 #img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
                 self.update_killfeed(img)
                 self.analyze_killfeed()
                 if self.debug:
                     logger.debug(f"Analyzing image took {time()-start} seconds")
 
+
     def update_killfeed(self, img):
-        heroes_found = self.analyze_image(img, 6)
+        heroes_found = self.analyze_image(img, 8)
         timestamp = time()
         prev = None
         for i, kf_item in enumerate(heroes_found):
             if self.show_debug_img:
+                #print(f"Confidence for {kf_item.hero} is {kf_item.confidence}")
+                text_point = ((kf_item.point[0], kf_item.point[1] + self.height + 10))
+                text = '{} {:.2f}'.format(kf_item.hero.value, kf_item.confidence)
+                cv2.putText(img, text, text_point, self.font, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
                 cv2.rectangle(img, (kf_item.point[0], kf_item.point[1]),
                               (kf_item.point[0] + self.width, kf_item.point[1] + self.height), self.color, 2)
             if not prev:
@@ -124,18 +133,19 @@ class KillFeedAnalyzer:
         heroes_found.sort(reverse=True, key=lambda kf_item: kf_item.point[1])
         return heroes_found
 
+
     def find_heroes(self, hero_icons, img_rgb, img_gray, threshold):
         heroes_found = dict()
         width = 66
         height = 46
         mask_num = 0
-        for hero, template in hero_icons:
+        for hero, (template, template_mask) in hero_icons:
             mask_num += 1
-            res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED)
+            res = cv2.matchTemplate(img_gray, template, cv2.TM_CCOEFF_NORMED, mask=template_mask)
             if self.debug:
                 logger.debug(f"Best match for hero {hero} is {str(res.max())}")
 
-            loc = np.where(res >= threshold)
+            loc = np.where((res >= threshold) & (res != float('inf')))
             mask = np.zeros(img_gray.shape[:2], np.uint8)
             for pt in zip(*loc[::-1]):
                 confidence = res[pt[1], pt[0]]
@@ -155,6 +165,7 @@ class KillFeedAnalyzer:
             hero_found.team = self.get_team_color(hero_found, width, height, img_rgb)
         return heroes_found.values()
 
+
     def get_team_color(self, kf_item: KillFeedItem, width: int, height: int, img_rbg):
         cropped = img_rbg[kf_item.point[1] - 2: kf_item.point[1] + height + 2,
                           kf_item.point[0] - 2:kf_item.point[0] + width + 2]
@@ -173,9 +184,11 @@ class KillFeedAnalyzer:
             return Team.RED
         return Team.UNKNOWN
 
+
     def _chunkify_list(self, some_list, chunk_count):
         for i in range(0, len(some_list), chunk_count):
             yield some_list[i:i + chunk_count]
+
 
     def analyze_killfeed(self):
         if self.killfeed_clear_time and self.multikilldetection and \
@@ -186,10 +199,7 @@ class KillFeedAnalyzer:
                     kill_count = 6
                 if self.api_client and f"{key}{kill_count}" not in self.short_event_history:
                     if kill_count > 1:
-                        if team == "red":
-                            self.api_client.send_ow_event(hero, self.kill_events[kill_count], "red")
-                        elif team == "blue":
-                            self.api_client.send_ow_event(hero, self.kill_events[kill_count], "blue")
+                        self.api_client.send_ow_event(hero, self.kill_events[kill_count], team)
                         self.short_event_history.add(f"{key}{kill_count}")
         if time() > self.killfeed_clear_time:
             self.multikilldetection.clear()
