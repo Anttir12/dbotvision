@@ -49,3 +49,9 @@ class Hero(Enum):
     WRECKINGBALL = "Wreckingball"
     ZARYA = "Zarya"
     ZENYATTA = "Zenyatta"
+
+
+class Ability(Enum):
+    CRITICAL_HIT = "Critical_hit"
+    BOB = "Bob"
+    HOOK = "Hook"
