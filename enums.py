@@ -72,4 +72,6 @@ class Ability(Enum):
     TURRET = "Turret"
     MOLTEN_CORE = "Molten_core"
     PRIMAL_RAGE = "Primal_rage"
+    JUMP_PACK = "Jump_pack"
+    STORM_ARROW = "Storm_arrow"
 
