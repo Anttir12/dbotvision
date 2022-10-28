@@ -21,7 +21,7 @@ def main():
     logger.info("Starting")
     dbot_api_client = try_create_api_client()
     kf_analyzer = analyzer.KillFeedAnalyzer(dbot_api_client, print_killfeed=True, act_instantly=True, combo_cutoff=3,
-                                            show_debug_img=False, debug=False)
+                                            show_debug_img=True, debug=False)
     kf_analyzer.start_analyzer()
 
 

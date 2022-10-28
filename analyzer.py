@@ -26,11 +26,9 @@ def load_hero_icons():
 def load_ability_icons():
     icons = dict()
     for a in Ability:
-        img = cv2.imread(f"ability_icons_with_mask/{a.value.lower()}.png")
+        img = cv2.imread(f"ability_icons/{a.value.lower()}.png")
         ability_icon = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        ability_mask = cv2.cvtColor(cv2.imread(f"ability_icons_with_mask/{a.value.lower()}_mask.png"),
-                                    cv2.COLOR_BGR2GRAY)
-        icons[a] = TemplateData(template=ability_icon, mask=ability_mask, width=img.shape[1], height=img.shape[0])
+        icons[a] = TemplateData(template=ability_icon, width=img.shape[1], height=img.shape[0])
     return icons
 
 
@@ -52,7 +50,7 @@ class KillFeedAnalyzer:
     }
 
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
-                 combo_cutoff=2, threshold=0.80):
+                 combo_cutoff=2, threshold=0.78):
         self.color = (0, 255, 0)
         self.width = 66
         self.height = 46
@@ -68,6 +66,7 @@ class KillFeedAnalyzer:
         self.print_killfeed = print_killfeed
         self.threshold = threshold
         self.font = cv2.FONT_HERSHEY_PLAIN
+        self.disable_debug_images = False
 
     def start_analyzer(self):
         with mss() as sct:
@@ -84,12 +83,12 @@ class KillFeedAnalyzer:
             while True:
                 if self.debug:
                     start = time()
-                test_image = None
-                #test_image = "test_images/sextuple.png"
-                if not test_image:
+                filename = None
+                #filename = "test_images/sextuple.png"
+                if not filename:
                     img = np.array(sct.grab(monitor))
                 else:
-                    img = cv2.imread(test_image)
+                    img = cv2.imread(filename)
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
                 self.update_killfeed(img)
                 self.analyze_killfeed()
@@ -97,7 +96,7 @@ class KillFeedAnalyzer:
                     logger.debug(f"Analyzing image took {time()-start} seconds")
 
     def update_killfeed(self, img):
-        heroes_found = self.analyze_image(img, 8)
+        heroes_found = self.analyze_image(img, 6)
         timestamp = time()
         prev = None
         small_image, abilities = None, []  # Needed here for debug purposes only
@@ -173,31 +172,43 @@ class KillFeedAnalyzer:
         heroes_found.sort(reverse=True, key=lambda kf_item: kf_item.point[1])
         return heroes_found
 
-    def find_abilities(self, img_rgb, threshold=0.50) -> Iterable[KillFeedAbility]:
+    def find_abilities(self, source_img, threshold=0.70) -> Iterable[KillFeedAbility]:
+
+        img_rgb = source_img.copy()
+        # Make the picture black & Red. Everything close to red is red. Rest is black. Increases crit detection
         img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2HSV)
-        mask1 = cv2.inRange(img_hsv, (0, 70, 50), (10, 255, 255))
-        mask2 = cv2.inRange(img_hsv, (170, 70, 50), (180, 255, 255))
-        mask = cv2.bitwise_or(mask1, mask2)
-        img_rgb[mask > 0] = (0, 0, 255, 255)
+        red_mask1 = cv2.inRange(img_hsv, (0, 70, 140), (10, 255, 255))
+        red_mask2 = cv2.inRange(img_hsv, (170, 70, 140), (180, 255, 255))
+        red_mask = cv2.bitwise_or(red_mask1, red_mask2)
+        white_mask = cv2.inRange(img_hsv, (0, 0, 230), (255, 25, 255))
+        img_rgb[red_mask > 0] = (0, 0, 255, 255)
+        img_rgb[white_mask > 0] = (255, 255, 255, 255)
+        img_rgb[(red_mask == 0) & (white_mask == 0)] = (0, 0, 0, 255)
+
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        #self.debug_image(img_rgb, "rgb", None)
+        #self.debug_image(img_gray, "gray")
         abilities_found: Dict[int, KillFeedAbility] = dict()
         mask_num = 0
         for ability, template_data in a_icons.items():
             if template_data.width > img_gray.shape[1] or template_data.height > img_gray.shape[0]:
                 logger.error(f"ERRROR!!! img shape: {img_gray.shape}  ability shape: {template_data.template.shape}")
                 continue
-            res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED, mask=template_data.mask)
+            res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED)
+            #self.debug_image(img_crit_gray, "gray", None)
+            #self.debug_image(template_data.template, "template", None)
+            #self.debug_image(img_crit_rgb, "brg")
             # TODO All the below. I don't remember how it works
             loc = np.where((res >= threshold) & (res != float('inf')))
-            mask = np.zeros(img_gray.shape[:2], np.uint8)
+            red_mask = np.zeros(img_gray.shape[:2], np.uint8)
             for pt in zip(*loc[::-1]):
                 confidence = res[pt[1], pt[0]]
                 midx = pt[0] + int(round(template_data.width / 2))
                 midy = pt[1] + int(round(template_data.height / 2))
-                mask_point = mask[midy, midx]
+                mask_point = red_mask[midy, midx]
                 # New match
                 if mask_point == 0:
-                    mask[pt[1]:pt[1] + template_data.height, pt[0]:pt[0] + template_data.width] = mask_num
+                    red_mask[pt[1]:pt[1] + template_data.height, pt[0]:pt[0] + template_data.width] = mask_num
                     abilities_found[mask_num] = KillFeedAbility(ability=ability, point=pt, confidence=confidence,
                                                                 template_data=template_data)
                     mask_num += 1
@@ -265,9 +276,9 @@ class KillFeedAnalyzer:
         kfl: KillFeedLine
         for kfl in self.killfeed:
             if kfl.hero_left.team == Team.BLUE and not kfl.reaction_sent:
-                if kfl.ability == Ability.HOOK:
+                if kfl.ability:
                     kfl.reaction_sent = True
-                    self.api_client.send_ow_event(kfl.hero_left.hero.value, "hook_kill", kfl.hero_left.team.value)
+                    self.api_client.send_ow_event(kfl.hero_left.hero.value, f"{kfl.ability.value.lower()}_kill", kfl.hero_left.team.value)
                 elif kfl.critical_hit:
                     kfl.reaction_sent = True
                     self.api_client.send_ow_event(kfl.hero_left.hero.value, "critical_hit", kfl.hero_left.team.value)
@@ -290,6 +301,7 @@ class KillFeedAnalyzer:
         self.killfeed_clear_time = time() + self.combo_cutoff
 
     def debug_image(self, img, text="debug", wait: Optional[int] = 0):
-        cv2.imshow(text, img)
-        if wait is not None:
-            cv2.waitKey(wait)
+        if not self.disable_debug_images:
+            cv2.imshow(text, img)
+            if wait is not None:
+                cv2.waitKey(wait)

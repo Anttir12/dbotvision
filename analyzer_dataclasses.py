@@ -8,9 +8,10 @@ from enums import Hero, Team, Action, Ability
 @dataclass
 class TemplateData:
     template: np.ndarray
-    mask: np.ndarray
     width: int
     height: int
+    mask: np.ndarray = None
+
 
 @dataclass
 class KillFeedHero:
@@ -29,6 +30,7 @@ class KillFeedHero:
 
     def __str__(self):
         return f"{self.team.value} {self.hero.value}"
+
 
 @dataclass
 class KillFeedAbility:
@@ -78,7 +80,7 @@ class KillFeedLine:
         for a in abilities:
             if a.ability == Ability.CRITICAL_HIT:
                 self.critical_hit = True
-            if not self.ability or a.confidence > best_match:
+            if (not self.ability or a.confidence > best_match) and a.ability != Ability.CRITICAL_HIT:
                 self.ability = a.ability
 
     def __hash__(self):
