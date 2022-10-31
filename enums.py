@@ -1,4 +1,6 @@
+from collections import defaultdict
 from enum import Enum
+from typing import List, Dict
 
 
 class Action(Enum):
@@ -52,26 +54,52 @@ class Hero(Enum):
 
 
 class Ability(Enum):
-    CRITICAL_HIT = "Critical_hit"
-    BOB = "Bob"
-    HOOK = "Hook"
-    TRAP = "Trap"
-    CONCUSSION_MINE = "Concussion_mine"
-    FIRE_STRIKE = "Fire_strike"
-    CHARGE = "Charge"
-    RAILGUN = "Railgun"
-    OVERCLOCK = "Overclock"
-    DYNAMITE = "Dynamite"
-    WHIP_SHOT = "Whip_shot"
-    JAVELIN = "Javelin"
-    SOUNDWAVE = "Soundwave"
-    PULSE_BOMB = "Pulse_bomb"
-    MELEE = "Melee"
-    GRENADE = "Grenade"
-    ARTILLERY = "Artillery"
-    TURRET = "Turret"
-    MOLTEN_CORE = "Molten_core"
-    PRIMAL_RAGE = "Primal_rage"
-    JUMP_PACK = "Jump_pack"
-    STORM_ARROW = "Storm_arrow"
 
+    def __new__(cls, *args, **kwds):
+        value = len(cls.__members__) + 1
+        obj = object.__new__(cls)
+        obj._value_ = value
+        return obj
+
+    def __init__(self, abilityname, hero):
+        self.ability = abilityname
+        self.hero = hero
+
+    CRITICAL_HIT = "Critical_hit", None
+    MELEE = "Melee", None
+    BOB = "Bob", Hero.ASHE
+    DYNAMITE = "Dynamite", Hero.ASHE
+    HOOK = "Hook", Hero.ROADHOG
+    TRAP = "Trap", Hero.JUNKRAT
+    CONCUSSION_MINE = "Concussion_mine", Hero.JUNKRAT
+    FIRE_STRIKE = "Fire_strike", Hero.REINHARDT
+    CHARGE = "Charge", Hero.REINHARDT
+    RAILGUN = "Railgun", Hero.SOJOURN
+    OVERCLOCK = "Overclock", Hero.SOJOURN
+    WHIP_SHOT = "Whip_shot", Hero.BRIGITTE
+    JAVELIN = "Javelin", Hero.ORISA
+    SOUNDWAVE = "Soundwave", Hero.LUCIO
+    PULSE_BOMB = "Pulse_bomb", Hero.TRACER
+    GRENADE = "Grenade", Hero.BASTION
+    ARTILLERY = "Artillery", Hero.BASTION
+    TURRET = "Turret", Hero.TORBJORN
+    MOLTEN_CORE = "Molten_core", Hero.TORBJORN
+    PRIMAL_RAGE = "Primal_rage", Hero.WINSTON
+    JUMP_PACK = "Jump_pack", Hero.WINSTON
+    STORM_ARROW = "Storm_arrow", Hero.HANZO
+    CALL_MECH = "Call_mech", Hero.DVA
+    BOOSTERS = "Boosters", Hero.DVA
+    MICRO_MISSILES = "Micro_missiles", Hero.DVA
+    SELF_DESTRUCT = "Self-destruct", Hero.DVA
+
+
+HERO_ABILITY_MAP: Dict[Hero, List[Ability]] = dict()
+for h in Hero:
+    HERO_ABILITY_MAP[h] = list()
+    for a in Ability:
+        # Echo can use any ability during ult
+        if h == Hero.ECHO:
+            HERO_ABILITY_MAP[h].append(a)
+        # None is a special case which means it is a common ability for everyone
+        if a.hero == h or a.hero is None:
+            HERO_ABILITY_MAP[h].append(a)

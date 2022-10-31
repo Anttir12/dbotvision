@@ -9,7 +9,7 @@ import numpy as np
 from mss import mss
 
 from dbot_api_client import DbotApiClient
-from enums import Hero, Team, Action, Ability
+from enums import Hero, Team, Action, Ability, HERO_ABILITY_MAP
 from analyzer_dataclasses import KillFeedHero, KillFeedLine, TemplateData, KillFeedAbility
 
 
@@ -26,13 +26,14 @@ def load_hero_icons():
 def load_ability_icons():
     icons = dict()
     for a in Ability:
-        img = cv2.imread(f"ability_icons/{a.value.lower()}.png")
+        img = cv2.imread(f"ability_icons/{a.ability.lower()}.png")
         ability_icon = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         icons[a] = TemplateData(template=ability_icon, width=img.shape[1], height=img.shape[0])
     return icons
 
 
 h_icons: Dict[Hero, TemplateData] = load_hero_icons()
+h_icons_list = list(h_icons.items())
 a_icons: Dict[Ability, TemplateData] = load_ability_icons()
 
 
@@ -50,7 +51,7 @@ class KillFeedAnalyzer:
     }
 
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
-                 combo_cutoff=2, threshold=0.78):
+                 combo_cutoff=2, threshold=0.78, thread_count=7):
         self.color = (0, 255, 0)
         self.width = 66
         self.height = 46
@@ -67,6 +68,8 @@ class KillFeedAnalyzer:
         self.threshold = threshold
         self.font = cv2.FONT_HERSHEY_PLAIN
         self.disable_debug_images = False
+        self.thread_count = thread_count
+        self.tpool = ThreadPool(processes=thread_count)
 
     def start_analyzer(self):
         with mss() as sct:
@@ -96,7 +99,7 @@ class KillFeedAnalyzer:
                     logger.debug(f"Analyzing image took {time()-start} seconds")
 
     def update_killfeed(self, img):
-        heroes_found = self.analyze_image(img, 6)
+        heroes_found = self.analyze_image(img)
         timestamp = time()
         prev = None
         small_image, abilities = None, []  # Needed here for debug purposes only
@@ -123,7 +126,8 @@ class KillFeedAnalyzer:
                         top_boundary = left.point[1] - 10
                         bottom_boundary = left.point[1] + left.template_data.height + 10
                         small_image = img[top_boundary:bottom_boundary, left_boudary:right_boudary]
-                        abilities = self.find_abilities(small_image)
+                        possible_abilities = [(a, a_icons[a]) for a in HERO_ABILITY_MAP[left.hero]]
+                        abilities = self.find_abilities(small_image, possible_abilities)
                         kfl.add_abilities(abilities)
 
                     if kfl not in self.killfeed:
@@ -157,22 +161,22 @@ class KillFeedAnalyzer:
             cv2.imshow("Matched image", img)
             cv2.waitKey(1)
 
-    def analyze_image(self, img_rgb, thread_count):
+    def analyze_image(self, img_rgb):
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
         heroes_found: List[KillFeedHero] = list()
-        chunks = self._chunkify_list(list(h_icons.items()), thread_count)
-        tpool = ThreadPool(processes=thread_count)
+        chunks = self._chunkify_list(h_icons_list, self.thread_count)
         threads = list()
         for chunk in chunks:
             img_copy = img_rgb.copy()
-            res = tpool.apply_async(self.find_heroes, (chunk, img_copy, img_gray, self.threshold))
+            res = self.tpool.apply_async(self.find_heroes, (chunk, img_copy, img_gray, self.threshold))
             threads.append(res)
         for t in threads:
             heroes_found.extend(t.get())
         heroes_found.sort(reverse=True, key=lambda kf_item: kf_item.point[1])
         return heroes_found
 
-    def find_abilities(self, source_img, threshold=0.70) -> Iterable[KillFeedAbility]:
+    def find_abilities(self, source_img, possible_abilities: List[Tuple[Ability, TemplateData]],
+                       threshold=0.70) -> Iterable[KillFeedAbility]:
 
         img_rgb = source_img.copy()
         # Make the picture black & Red. Everything close to red is red. Rest is black. Increases crit detection
@@ -190,7 +194,7 @@ class KillFeedAnalyzer:
         #self.debug_image(img_gray, "gray")
         abilities_found: Dict[int, KillFeedAbility] = dict()
         mask_num = 0
-        for ability, template_data in a_icons.items():
+        for ability, template_data in possible_abilities:
             if template_data.width > img_gray.shape[1] or template_data.height > img_gray.shape[0]:
                 logger.error(f"ERRROR!!! img shape: {img_gray.shape}  ability shape: {template_data.template.shape}")
                 continue
@@ -226,7 +230,8 @@ class KillFeedAnalyzer:
             mask_num += 1
             res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED, mask=template_data.mask)
             if self.debug:
-                logger.debug(f"Best match for hero {hero} is {str(res.max())}")
+                pass
+                #logger.debug(f"Best match for hero {hero} is {str(res.max())}")
 
             loc = np.where((res >= threshold) & (res != float('inf')))
             mask = np.zeros(img_gray.shape[:2], np.uint8)
@@ -238,7 +243,8 @@ class KillFeedAnalyzer:
                 # New match
                 if mask_point == 0:
                     mask[pt[1]:pt[1] + template_data.height, pt[0]:pt[0] + template_data.width] = mask_num
-                    heroes_found[mask_num] = KillFeedHero(hero=hero, point=pt, confidence=confidence, template_data=template_data)
+                    heroes_found[mask_num] = KillFeedHero(hero=hero, point=pt, confidence=confidence,
+                                                          template_data=template_data)
                     mask_num += 1
                 # Not new but better match
                 elif heroes_found[mask_point].confidence < confidence:
@@ -269,16 +275,15 @@ class KillFeedAnalyzer:
         return Team.UNKNOWN
 
     def _chunkify_list(self, some_list, chunk_count):
-        for i in range(0, len(some_list), chunk_count):
-            yield some_list[i:i + chunk_count]
+        return [some_list[i::chunk_count] for i in range(chunk_count)]
 
     def analyze_killfeed(self):
         kfl: KillFeedLine
         for kfl in self.killfeed:
-            if kfl.hero_left.team == Team.BLUE and not kfl.reaction_sent:
+            if not kfl.reaction_sent:
                 if kfl.ability:
                     kfl.reaction_sent = True
-                    self.api_client.send_ow_event(kfl.hero_left.hero.value, f"{kfl.ability.value.lower()}_kill", kfl.hero_left.team.value)
+                    self.api_client.send_ow_event(kfl.hero_left.hero.value, f"{kfl.ability.ability.lower()}_kill", kfl.hero_left.team.value)
                 elif kfl.critical_hit:
                     kfl.reaction_sent = True
                     self.api_client.send_ow_event(kfl.hero_left.hero.value, "critical_hit", kfl.hero_left.team.value)
