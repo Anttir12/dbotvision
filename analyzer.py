@@ -51,7 +51,7 @@ class KillFeedAnalyzer:
     }
 
     def _if_debug_print(self):
-        return self.debug and self.i % 10 == 0
+        return self.debug and self.i % 3 == 0
 
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
                  combo_cutoff=2, threshold=0.78, thread_count=7):
@@ -79,7 +79,7 @@ class KillFeedAnalyzer:
         with mss() as sct:
             mon = sct.monitors[1]
             w = 550
-            h = 450
+            h = 500
             monitor = {
                 "top": mon["top"] + 15,
                 "left": mon["left"] + 3820 - w,
@@ -92,7 +92,7 @@ class KillFeedAnalyzer:
                 if self.debug:
                     start = time()
                 filename = None
-                filename = "test_images/sextuple.png"
+                #filename = "test_images/sextuple.png"
                 if not filename:
                     img = np.array(sct.grab(monitor))
                 else:
@@ -206,13 +206,15 @@ class KillFeedAnalyzer:
         #print(lines.keys())
         #print('boundaries:')
         #print((min_x, min_y), (max_x, max_y))
+        heroes_found: List[KillFeedHero] = list()
+        if min_x is None:
+            return heroes_found
         small_bgr_img = img_rgb[min_y:max_y, min_x:max_x]
         small_gray_img = img_gray[min_y:max_y, min_x:max_x]
-        if self._if_debug_print():
-            logger.debug(f'Making image smaller took : {time()-start} seconds')
+        #if self._if_debug_print():
+        #    logger.debug(f'Making image smaller took : {time()-start} seconds')
         #cv2.imshow("small", small_gray_img)
-        #cv2.waitKey(0)
-        heroes_found: List[KillFeedHero] = list()
+        #cv2.waitKey(1)
         chunks = self._chunkify_list(h_icons_list, self.thread_count)
         threads = list()
         for chunk in chunks:
