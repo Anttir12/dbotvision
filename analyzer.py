@@ -1,7 +1,7 @@
-from collections import deque, Counter
+from collections import deque, Counter, defaultdict
 from multiprocessing.pool import ThreadPool
-from time import time
-from typing import Dict, List, Iterable, Tuple, Optional
+from time import time, sleep
+from typing import Dict, List, Iterable, Tuple, Optional, Set
 
 import cv2
 import logging
@@ -50,11 +50,14 @@ class KillFeedAnalyzer:
         6: "sextuple_kill",
     }
 
+    def _if_debug_print(self):
+        return self.debug and self.i % 10 == 0
+
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
                  combo_cutoff=2, threshold=0.78, thread_count=7):
         self.color = (0, 255, 0)
-        self.width = 66
-        self.height = 46
+        self.hero_width = 66
+        self.hero_height = 46
         self.debug = debug
         self.show_debug_img = show_debug_img
         self.killfeed = deque()
@@ -70,6 +73,7 @@ class KillFeedAnalyzer:
         self.disable_debug_images = False
         self.thread_count = thread_count
         self.tpool = ThreadPool(processes=thread_count)
+        self.i = 0
 
     def start_analyzer(self):
         with mss() as sct:
@@ -84,10 +88,11 @@ class KillFeedAnalyzer:
                 "mon": 1,
             }
             while True:
+                self.i += 1
                 if self.debug:
                     start = time()
                 filename = None
-                #filename = "test_images/sextuple.png"
+                filename = "test_images/sextuple.png"
                 if not filename:
                     img = np.array(sct.grab(monitor))
                 else:
@@ -95,11 +100,14 @@ class KillFeedAnalyzer:
                     img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
                 self.update_killfeed(img)
                 self.analyze_killfeed()
-                if self.debug:
-                    logger.debug(f"Analyzing image took {time()-start} seconds")
+                if self._if_debug_print():
+                    logger.debug(f"Analyzing loop took {time()-start} seconds")
 
     def update_killfeed(self, img):
+        start = time()
         heroes_found = self.analyze_image(img)
+        if self._if_debug_print():
+            logger.debug(f"Analyzing image took {time() - start} seconds")
         timestamp = time()
         prev = None
         small_image, abilities = None, []  # Needed here for debug purposes only
@@ -140,15 +148,15 @@ class KillFeedAnalyzer:
                 prev = None
 
             if self.show_debug_img:
-                text_point = (kf_item.point[0], kf_item.point[1] + self.height + 12)
+                text_point = (kf_item.point[0], kf_item.point[1] + self.hero_height + 12)
                 text = '{} {:.2f}'.format(kf_item.hero.value, kf_item.confidence)
                 cv2.putText(img, text, text_point, self.font, 0.8, (0, 255, 0), 1, cv2.LINE_AA)
                 cv2.rectangle(img, (kf_item.point[0], kf_item.point[1]),
-                              (kf_item.point[0] + self.width, kf_item.point[1] + self.height), self.color, 2)
+                              (kf_item.point[0] + self.hero_width, kf_item.point[1] + self.hero_height), self.color, 2)
 
                 if small_image is not None:
                     for af_item in abilities:
-                        text_point = (af_item.point[0], af_item.point[1] + self.height + 10)
+                        text_point = (af_item.point[0], af_item.point[1] + self.hero_height + 10)
                         text = '{} {:.2f}'.format(af_item.ability.value, af_item.confidence)
                         cv2.putText(small_image, text, text_point, self.font, 0.8, (0, 255, 0), 1, cv2.LINE_AA)
                         cv2.rectangle(small_image, (af_item.point[0], af_item.point[1]),
@@ -162,18 +170,91 @@ class KillFeedAnalyzer:
             cv2.waitKey(1)
 
     def analyze_image(self, img_rgb):
+        start = time()
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2HSV)
+        red_mask = cv2.inRange(img_hsv, (170, 175, 220), (180, 205, 240))
+        blue_mask = cv2.inRange(img_hsv, (85, 180, 205), (105, 235, 250))
+        # Usd to find the nearly constant color stripes next to hero icons to make the analyzed img smaller
+        kf_stripes = img_gray.copy()
+        kf_stripes[(blue_mask > 0) & (red_mask > 0)] = 255
+        kf_stripes[(blue_mask == 0) & (red_mask == 0)] = 0
+        lines: Dict[Tuple[int, int, int]] = dict()
+        dem_spots = {(i[1], i[0]): None for i in np.argwhere(kf_stripes > 0)}
+        min_y, max_y, min_x, max_x = None, None, None, None
+        for x, y in dem_spots.keys():
+            line_start = y
+            temp_y = y+1
+            line_end = None
+            while (x, temp_y) in dem_spots:
+                line_end = temp_y
+                temp_y += 1
+            if line_end and line_end - y > 30:
+                boundary_x = (max(0, x - 70), x + 70)
+                boundary_y = (max(0, line_start - 45), line_end + 45)
+                if min_x is None or boundary_x[0] < min_x:
+                    min_x = boundary_x[0]
+                if max_x is None or boundary_x[1] > max_x:
+                    max_x = boundary_x[1]
+                if min_y is None or boundary_y[0] < min_y:
+                    min_y = boundary_y[0]
+                if max_y is None or boundary_y[1] > max_y:
+                    max_y = boundary_y[1]
+                lines[(x, line_start, line_end)] = None
+
+        #print(dem_spots.keys())
+        #print(lines.keys())
+        #print('boundaries:')
+        #print((min_x, min_y), (max_x, max_y))
+        small_bgr_img = img_rgb[min_y:max_y, min_x:max_x]
+        small_gray_img = img_gray[min_y:max_y, min_x:max_x]
+        if self._if_debug_print():
+            logger.debug(f'Making image smaller took : {time()-start} seconds')
+        #cv2.imshow("small", small_gray_img)
+        #cv2.waitKey(0)
         heroes_found: List[KillFeedHero] = list()
         chunks = self._chunkify_list(h_icons_list, self.thread_count)
         threads = list()
         for chunk in chunks:
-            img_copy = img_rgb.copy()
-            res = self.tpool.apply_async(self.find_heroes, (chunk, img_copy, img_gray, self.threshold))
+            img_copy = small_bgr_img.copy()
+            res = self.tpool.apply_async(self.find_heroes, (chunk, img_copy, small_gray_img, self.threshold))
             threads.append(res)
         for t in threads:
             heroes_found.extend(t.get())
         heroes_found.sort(reverse=True, key=lambda kf_item: kf_item.point[1])
         return heroes_found
+
+    def find_heroes(self, hero_icons: List[Tuple[Hero, TemplateData]], img_rgb, img_gray, threshold)\
+            -> Iterable[KillFeedHero]:
+        heroes_found: Dict[int, KillFeedHero] = dict()
+        mask_num = 0
+        for hero, template_data in hero_icons:
+            mask_num += 1
+            res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED, mask=template_data.mask)
+            if self.debug:
+                pass
+                #logger.debug(f"Best match for hero {hero} is {str(res.max())}")
+
+            loc = np.where((res >= threshold) & (res != float('inf')))
+            mask = np.zeros(img_gray.shape[:2], np.uint8)
+            for pt in zip(*loc[::-1]):
+                confidence = res[pt[1], pt[0]]
+                midx = pt[0] + int(round(template_data.width / 2))
+                midy = pt[1] + int(round(template_data.height / 2))
+                mask_point = mask[midy, midx]
+                # New match
+                if mask_point == 0:
+                    mask[pt[1]:pt[1] + template_data.height, pt[0]:pt[0] + template_data.width] = mask_num
+                    heroes_found[mask_num] = KillFeedHero(hero=hero, point=pt, confidence=confidence,
+                                                          template_data=template_data)
+                    mask_num += 1
+                # Not new but better match
+                elif heroes_found[mask_point].confidence < confidence:
+                    heroes_found[mask_point].confidence = confidence
+                    heroes_found[mask_point].point = pt
+        for hero_found in heroes_found.values():
+            hero_found.team = self.get_team_color(hero_found, img_rgb)
+        return heroes_found.values()
 
     def find_abilities(self, source_img, possible_abilities: List[Tuple[Ability, TemplateData]],
                        threshold=0.70) -> Iterable[KillFeedAbility]:
@@ -221,38 +302,6 @@ class KillFeedAnalyzer:
                     abilities_found[mask_point].confidence = confidence
                     abilities_found[mask_point].point = pt
         return abilities_found.values()
-
-    def find_heroes(self, hero_icons: List[Tuple[Hero, TemplateData]], img_rgb, img_gray, threshold)\
-            -> Iterable[KillFeedHero]:
-        heroes_found: Dict[int, KillFeedHero] = dict()
-        mask_num = 0
-        for hero, template_data in hero_icons:
-            mask_num += 1
-            res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED, mask=template_data.mask)
-            if self.debug:
-                pass
-                #logger.debug(f"Best match for hero {hero} is {str(res.max())}")
-
-            loc = np.where((res >= threshold) & (res != float('inf')))
-            mask = np.zeros(img_gray.shape[:2], np.uint8)
-            for pt in zip(*loc[::-1]):
-                confidence = res[pt[1], pt[0]]
-                midx = pt[0] + int(round(template_data.width / 2))
-                midy = pt[1] + int(round(template_data.height / 2))
-                mask_point = mask[midy, midx]
-                # New match
-                if mask_point == 0:
-                    mask[pt[1]:pt[1] + template_data.height, pt[0]:pt[0] + template_data.width] = mask_num
-                    heroes_found[mask_num] = KillFeedHero(hero=hero, point=pt, confidence=confidence,
-                                                          template_data=template_data)
-                    mask_num += 1
-                # Not new but better match
-                elif heroes_found[mask_point].confidence < confidence:
-                    heroes_found[mask_point].confidence = confidence
-                    heroes_found[mask_point].point = pt
-        for hero_found in heroes_found.values():
-            hero_found.team = self.get_team_color(hero_found, img_rgb)
-        return heroes_found.values()
 
     def get_team_color(self, kf_item: KillFeedHero, img_rbg) -> Team:
         width = kf_item.template_data.width
