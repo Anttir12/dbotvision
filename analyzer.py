@@ -92,7 +92,7 @@ class KillFeedAnalyzer:
                 if self.debug:
                     start = time()
                 filename = None
-                #filename = "test_images/sextuple.png"
+                filename = "test_images/sextuple.png"
                 if not filename:
                     img = np.array(sct.grab(monitor))
                 else:
@@ -171,6 +171,7 @@ class KillFeedAnalyzer:
 
     def analyze_image(self, img_rgb):
         start = time()
+        cpy = img_rgb.copy()
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
         img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2HSV)
         red_mask = cv2.inRange(img_hsv, (170, 175, 220), (180, 205, 240))
@@ -179,42 +180,69 @@ class KillFeedAnalyzer:
         kf_stripes = img_gray.copy()
         kf_stripes[(blue_mask > 0) & (red_mask > 0)] = 255
         kf_stripes[(blue_mask == 0) & (red_mask == 0)] = 0
-        lines: Dict[Tuple[int, int, int]] = dict()
+        visited: Set[Tuple[int, int]] = set()
+        lines: Dict[Tuple[int, int], int] = dict()
         dem_spots = {(i[1], i[0]): None for i in np.argwhere(kf_stripes > 0)}
-        min_y, max_y, min_x, max_x = None, None, None, None
         for x, y in dem_spots.keys():
+            if (x, y) in visited:
+                continue
             line_start = y
             temp_y = y+1
             line_end = None
-            while (x, temp_y) in dem_spots:
+            visited.add((x, y))
+            while (x, temp_y) in dem_spots and (x, temp_y) not in visited:
+                visited.add((x, temp_y))
                 line_end = temp_y
                 temp_y += 1
             if line_end and line_end - y > 30:
-                boundary_x = (max(0, x - 70), x + 70)
-                boundary_y = (max(0, line_start - 45), line_end + 45)
-                if min_x is None or boundary_x[0] < min_x:
-                    min_x = boundary_x[0]
-                if max_x is None or boundary_x[1] > max_x:
-                    max_x = boundary_x[1]
-                if min_y is None or boundary_y[0] < min_y:
-                    min_y = boundary_y[0]
-                if max_y is None or boundary_y[1] > max_y:
-                    max_y = boundary_y[1]
-                lines[(x, line_start, line_end)] = None
+                lines[(x, line_start)] = line_end
 
-        #print(dem_spots.keys())
-        #print(lines.keys())
-        #print('boundaries:')
-        #print((min_x, min_y), (max_x, max_y))
+        merged_lines: Dict[Tuple[int, int], int] = dict()
+        todels = set()
+        for line_start, end_y in lines.items():
+            x, start_y = line_start
+            merged_lines[line_start] = end_y
+            for temp_x in range(x-3, x+6):
+                if temp_x == x or (temp_x, start_y) in merged_lines:
+                    continue
+                for temp_y in range(start_y-5, start_y + 10):
+                    if (temp_x, temp_y) in lines:
+                        todels.add((temp_x, temp_y))
+                        break
+        for todel in todels:
+            del merged_lines[todel]
+
+
+
+        # TODO: Linjat löydetty ja vierekkäiset filtteröity pois. Joukon pitäisi olla kohtuu pieni aina. Etsi samalla tasolla olevat linjat ja leikkaa iconit tunnistettavaksi
         heroes_found: List[KillFeedHero] = list()
-        if min_x is None:
-            return heroes_found
-        small_bgr_img = img_rgb[min_y:max_y, min_x:max_x]
-        small_gray_img = img_gray[min_y:max_y, min_x:max_x]
+        print(merged_lines)
+        pairs: List[Tuple[int, int, int, int]] = []
+        matched: Dict[Tuple[int, int], int] = dict()
+        for (start1_x, start1_y), end1_y in merged_lines.items():
+            if (start1_x, start1_y) in matched:
+                continue
+            for (start2_x, start2_y), end2_y in merged_lines.items():
+                if (start1_x, start1_y) == (start2_x, start2_y):
+                    continue
+                if abs(start1_x - start2_x) > 40 and start1_y - 10 < start2_y and end2_y < end1_y + 10:
+                    pairs.append((start1_x, start1_y - 10, start2_x, end1_y + 10))
+                    break
+
+        small_images = list()
+        for pair in pairs:
+            small_images.append(cpy[pair[1]:pair[3], pair[0] - 80:pair[0] + 5])
+            small_images.append(cpy[pair[1]:pair[3], pair[2] - 5:pair[2] + 80])
+
+        for i, _img in enumerate(small_images):
+            cv2.imshow(f'test{i}', _img)
+        print(f'Time: {time()-start}')
+        print(pairs)
+        print(1/0)
         #if self._if_debug_print():
         #    logger.debug(f'Making image smaller took : {time()-start} seconds')
-        #cv2.imshow("small", small_gray_img)
-        #cv2.waitKey(1)
+        cv2.imshow("small", small_gray_img)
+        cv2.waitKey(1)
         chunks = self._chunkify_list(h_icons_list, self.thread_count)
         threads = list()
         for chunk in chunks:
