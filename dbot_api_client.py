@@ -42,7 +42,6 @@ class DbotApiClient:
         return False
 
     def send_ow_event(self, hero: str, event: str, team: str):
-        return
         logger.debug(f"Sending event {event} {team} {hero}")
         response = self._post(self.base_url + "bot/ow_event",
                               json={"hero": hero, "event": event, "team": team})
