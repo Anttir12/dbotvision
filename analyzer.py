@@ -135,7 +135,10 @@ class KillFeedAnalyzer:
                         bottom_boundary = left.point[1] + left.template_data.height + 10
                         small_image = img[top_boundary:bottom_boundary, left_boudary:right_boudary]
                         possible_abilities = [(a, a_icons[a]) for a in HERO_ABILITY_MAP[left.hero]]
+                        cv2.imshow("ability", small_image)
+                        cv2.waitKey(0)
                         abilities = self.find_abilities(small_image, possible_abilities)
+
                         kfl.add_abilities(abilities)
 
                     if kfl not in self.killfeed:
@@ -173,6 +176,7 @@ class KillFeedAnalyzer:
         start = time()
         cpy = img_rgb.copy()
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+        gray_copy = img_gray.copy()
         img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2HSV)
         red_mask = cv2.inRange(img_hsv, (170, 175, 220), (180, 205, 240))
         blue_mask = cv2.inRange(img_hsv, (85, 180, 205), (105, 235, 250))
@@ -197,8 +201,8 @@ class KillFeedAnalyzer:
             if line_end and line_end - y > 30:
                 lines[(x, line_start)] = line_end
 
-        print("lines")
-        print(lines)
+        #print("lines")
+        #print(lines)
 
         merged_lines: Dict[Tuple[int, int], int] = dict()
         todels = set()
@@ -210,18 +214,18 @@ class KillFeedAnalyzer:
             for temp_x in range(x-3, x+6):
                 for temp_y in range(start_y-5, start_y + 5):
                     if (temp_x, temp_y) in lines:
-                        print(f"Deleting {(temp_x, temp_y)} because of {x, start_y}")
+                        #print(f"Deleting {(temp_x, temp_y)} because of {x, start_y}")
                         todels.add((temp_x, temp_y))
                         break
 
-        print("todels")
-        print(todels)
+        #print("todels")
+        #print(todels)
 
         # TODO: Linjat löydetty ja vierekkäiset filtteröity pois. Joukon pitäisi olla kohtuu pieni aina. Etsi samalla tasolla olevat linjat ja leikkaa iconit tunnistettavaksi
         heroes_found: List[KillFeedHero] = list()
-        print("merged_lines")
-        print(merged_lines)
-        print(len(merged_lines))
+        #print("merged_lines")
+        #print(merged_lines)
+        #print(len(merged_lines))
         pairs: Dict[Tuple[int, int, int, int]] = dict()
         for (start1_x, start1_y), end1_y in merged_lines.items():
             for (start2_x, start2_y), end2_y in merged_lines.items():
@@ -236,64 +240,44 @@ class KillFeedAnalyzer:
 
         small_images = list()
         for i, pair in enumerate(pairs):
-            small_images.append((f'{i}test-1', cpy[pair[1]:pair[3], pair[0] - 80:pair[0] + 5]))
-            small_images.append((f'{i}test-2', cpy[pair[1]:pair[3], pair[2] - 5:pair[2] + 80]))
+            small_images.append((cpy[pair[1]:pair[3], pair[0] - 80:pair[0] + 5],
+                                 gray_copy[pair[1]:pair[3], pair[0] - 80:pair[0] + 5], f'{i}test-1'))
+            small_images.append((cpy[pair[1]:pair[3], pair[2] - 5:pair[2] + 80],
+                                 gray_copy[pair[1]:pair[3], pair[2] - 5:pair[2] + 80], f'{i}test-2'))
 
-        print(f'Time: {time() - start}')
-        print(pairs)
-        print(len(pairs))
-        for i, _img in enumerate(small_images):
-            cv2.imshow(_img[0], _img[1])
-        cv2.waitKey(0)
+        #print(f'Time: {time() - start}')
+        #print(pairs)
+        #print(len(pairs))
+        #for i, _img in enumerate(small_images):
+        #    cv2.imshow(_img[2], _img[1])
+        #cv2.waitKey(0)
 
+        #heroes_found = self.find_heroes(cpy, gray_copy, self.threshold)
 
-        print(1/0)
-        #if self._if_debug_print():
-        #    logger.debug(f'Making image smaller took : {time()-start} seconds')
-        cv2.imshow("small", small_gray_img)
-        cv2.waitKey(1)
-        chunks = self._chunkify_list(h_icons_list, self.thread_count)
         threads = list()
-        for chunk in chunks:
-            img_copy = small_bgr_img.copy()
-            res = self.tpool.apply_async(self.find_heroes, (chunk, img_copy, small_gray_img, self.threshold))
+        start_find = time()
+        for small_image in small_images:
+            res = self.tpool.apply_async(self.find_heroes, (small_image[0], small_image[1], self.threshold))
             threads.append(res)
-        for t in threads:
-            heroes_found.extend(t.get())
+        for i, t in enumerate(threads):
+            if kf_item := t.get():
+                heroes_found.append(kf_item)
+                print(f'Hero {i} find took {time()-start}')
+        print(f'Took {time()-start_find} to find heroes')
         heroes_found.sort(reverse=True, key=lambda kf_item: kf_item.point[1])
         return heroes_found
 
-    def find_heroes(self, hero_icons: List[Tuple[Hero, TemplateData]], img_rgb, img_gray, threshold)\
-            -> Iterable[KillFeedHero]:
-        heroes_found: Dict[int, KillFeedHero] = dict()
-        mask_num = 0
-        for hero, template_data in hero_icons:
-            mask_num += 1
+    def find_heroes(self, img_rgb, img_gray, threshold) -> Optional[KillFeedHero]:
+        for hero, template_data in h_icons.items():
             res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED, mask=template_data.mask)
-            if self.debug:
-                pass
-                #logger.debug(f"Best match for hero {hero} is {str(res.max())}")
-
             loc = np.where((res >= threshold) & (res != float('inf')))
-            mask = np.zeros(img_gray.shape[:2], np.uint8)
             for pt in zip(*loc[::-1]):
                 confidence = res[pt[1], pt[0]]
-                midx = pt[0] + int(round(template_data.width / 2))
-                midy = pt[1] + int(round(template_data.height / 2))
-                mask_point = mask[midy, midx]
-                # New match
-                if mask_point == 0:
-                    mask[pt[1]:pt[1] + template_data.height, pt[0]:pt[0] + template_data.width] = mask_num
-                    heroes_found[mask_num] = KillFeedHero(hero=hero, point=pt, confidence=confidence,
-                                                          template_data=template_data)
-                    mask_num += 1
-                # Not new but better match
-                elif heroes_found[mask_point].confidence < confidence:
-                    heroes_found[mask_point].confidence = confidence
-                    heroes_found[mask_point].point = pt
-        for hero_found in heroes_found.values():
-            hero_found.team = self.get_team_color(hero_found, img_rgb)
-        return heroes_found.values()
+                hero_found = KillFeedHero(hero=hero, point=pt, confidence=confidence, template_data=template_data)
+                hero_found.team = self.get_team_color(hero_found, img_rgb)
+                return hero_found
+
+        return None
 
     def find_abilities(self, source_img, possible_abilities: List[Tuple[Ability, TemplateData]],
                        threshold=0.70) -> Iterable[KillFeedAbility]:
