@@ -197,47 +197,56 @@ class KillFeedAnalyzer:
             if line_end and line_end - y > 30:
                 lines[(x, line_start)] = line_end
 
+        print("lines")
+        print(lines)
+
         merged_lines: Dict[Tuple[int, int], int] = dict()
         todels = set()
         for line_start, end_y in lines.items():
-            x, start_y = line_start
+            if line_start in todels:
+                continue
             merged_lines[line_start] = end_y
+            x, start_y = line_start
             for temp_x in range(x-3, x+6):
-                if temp_x == x or (temp_x, start_y) in merged_lines:
-                    continue
-                for temp_y in range(start_y-5, start_y + 10):
+                for temp_y in range(start_y-5, start_y + 5):
                     if (temp_x, temp_y) in lines:
+                        print(f"Deleting {(temp_x, temp_y)} because of {x, start_y}")
                         todels.add((temp_x, temp_y))
                         break
-        for todel in todels:
-            del merged_lines[todel]
 
-
+        print("todels")
+        print(todels)
 
         # TODO: Linjat löydetty ja vierekkäiset filtteröity pois. Joukon pitäisi olla kohtuu pieni aina. Etsi samalla tasolla olevat linjat ja leikkaa iconit tunnistettavaksi
         heroes_found: List[KillFeedHero] = list()
+        print("merged_lines")
         print(merged_lines)
-        pairs: List[Tuple[int, int, int, int]] = []
-        matched: Dict[Tuple[int, int], int] = dict()
+        print(len(merged_lines))
+        pairs: Dict[Tuple[int, int, int, int]] = dict()
         for (start1_x, start1_y), end1_y in merged_lines.items():
-            if (start1_x, start1_y) in matched:
-                continue
             for (start2_x, start2_y), end2_y in merged_lines.items():
                 if (start1_x, start1_y) == (start2_x, start2_y):
                     continue
-                if abs(start1_x - start2_x) > 40 and start1_y - 10 < start2_y and end2_y < end1_y + 10:
-                    pairs.append((start1_x, start1_y - 10, start2_x, end1_y + 10))
+                if start1_x - start2_x > 40 and start1_y - 10 < start2_y and end2_y < end1_y + 10:
+                    if start1_x < start2_x:
+                        pairs[(start1_x, start1_y - 10, start2_x, end1_y + 10)] = None
+                    else:
+                        pairs[start2_x, start1_y - 10, start1_x, end1_y + 10] = None
                     break
 
         small_images = list()
-        for pair in pairs:
-            small_images.append(cpy[pair[1]:pair[3], pair[0] - 80:pair[0] + 5])
-            small_images.append(cpy[pair[1]:pair[3], pair[2] - 5:pair[2] + 80])
+        for i, pair in enumerate(pairs):
+            small_images.append((f'{i}test-1', cpy[pair[1]:pair[3], pair[0] - 80:pair[0] + 5]))
+            small_images.append((f'{i}test-2', cpy[pair[1]:pair[3], pair[2] - 5:pair[2] + 80]))
 
-        for i, _img in enumerate(small_images):
-            cv2.imshow(f'test{i}', _img)
-        print(f'Time: {time()-start}')
+        print(f'Time: {time() - start}')
         print(pairs)
+        print(len(pairs))
+        for i, _img in enumerate(small_images):
+            cv2.imshow(_img[0], _img[1])
+        cv2.waitKey(0)
+
+
         print(1/0)
         #if self._if_debug_print():
         #    logger.debug(f'Making image smaller took : {time()-start} seconds')
