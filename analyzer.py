@@ -1,7 +1,8 @@
-from collections import deque, Counter, defaultdict
+import traceback
+from collections import deque, Counter
 from dataclasses import dataclass
 from multiprocessing.pool import ThreadPool, ApplyResult
-from time import time, sleep
+from time import time
 from typing import Dict, List, Iterable, Tuple, Optional, Set
 
 import cv2
@@ -18,6 +19,11 @@ from analyzer_dataclasses import KillFeedHero, TemplateData, KillFeedAbility
 class KillFeedLine:
     threshold: float
     timestamp: float
+    ability_area: Tuple[int, int, int, int]
+    hero_left_area: Tuple[int, int, int, int]
+    hero_right_area: Tuple[int, int, int, int]
+    gray_img: np.ndarray
+    bgr_img: np.ndarray
     hero_left_bgr: np.ndarray = None
     hero_left_gray: np.ndarray = None
     hero_right_bgr: np.ndarray = None
@@ -31,6 +37,46 @@ class KillFeedLine:
     ability: Ability = None
     ability_bgr: np.ndarray = None
     reaction_sent: bool = False
+
+    def __post_init__(self):
+        self.hero_left_bgr = self.bgr_img[self.hero_left_area[0]:self.hero_left_area[1],
+                                          self.hero_left_area[2]:self.hero_left_area[3]]
+        self.hero_left_gray = self.gray_img[self.hero_left_area[0]:self.hero_left_area[1],
+                                            self.hero_left_area[2]:self.hero_left_area[3]]
+        self.hero_right_bgr = self.bgr_img[self.hero_right_area[0]:self.hero_right_area[1],
+                                           self.hero_right_area[2]:self.hero_right_area[3]]
+        self.hero_right_gray = self.gray_img[self.hero_right_area[0]:self.hero_right_area[1],
+                                             self.hero_right_area[2]:self.hero_right_area[3]]
+        self.ability_bgr = self.bgr_img[self.ability_area[0]:self.ability_area[1],
+                                        self.ability_area[2]:self.ability_area[3]]
+
+    def is_valid(self):
+        return self.hero_left_gray.shape[0] >= 48 and \
+               self.hero_left_gray.shape[1] >= 66 and \
+               self.hero_right_gray.shape[0] >= 48 and \
+               self.hero_right_gray.shape[1] >= 66
+
+    def draw_debug_line(self, img, font):
+        hero_height, hero_width, color = 48, 66, (0, 255, 0)
+
+        for kf_item in [self.hero_left, self.hero_right]:
+            if kf_item is None:
+                continue
+            if kf_item == self.hero_left:
+                point = kf_item.point[0] + self.hero_left_area[2], kf_item.point[1] + self.hero_left_area[0]
+            else:
+                point = kf_item.point[0] + self.hero_right_area[2], kf_item.point[1] + self.hero_right_area[0]
+            text_point = (point[0], point[1] + hero_height + 10)
+            text = '{} {:.2f}'.format(kf_item.hero.value, kf_item.confidence)
+            cv2.putText(img, text, text_point, font, 0.8, (0, 255, 0), 1, cv2.LINE_AA)
+            cv2.rectangle(img, (point[0], point[1]), (point[0] + hero_width, point[1] + hero_height), color, 2)
+
+    def draw_search_area(self, img, font):
+        color = (255,0,0)
+        cv2.rectangle(img, (self.hero_left_area[2], self.hero_left_area[0]),
+                      (self.hero_left_area[3], self.hero_left_area[1]), color, 2)
+        cv2.rectangle(img, (self.hero_right_area[2], self.hero_right_area[0]),
+                      (self.hero_right_area[3], self.hero_right_area[1]), color, 2)
 
     def analyze(self):
         self.determine_heroes()
@@ -81,37 +127,22 @@ class KillFeedLine:
         img_rgb[(red_mask == 0) & (white_mask == 0)] = (0, 0, 0, 255)
 
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-        # self.debug_image(img_rgb, "rgb", None)
-        # self.debug_image(img_gray, "gray")
-        abilities_found: Dict[int, KillFeedAbility] = dict()
-        mask_num = 0
         for ability, template_data in possible_abilities:
             if template_data.width > img_gray.shape[1] or template_data.height > img_gray.shape[0]:
                 logger.error(f"ERRROR!!! img shape: {img_gray.shape}  ability shape: {template_data.template.shape}")
                 continue
             res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED)
-            # self.debug_image(img_crit_gray, "gray", None)
-            # self.debug_image(template_data.template, "template", None)
-            # self.debug_image(img_crit_rgb, "brg")
-            # TODO All the below. I don't remember how it works
+            # debug_image(img_crit_gray, "gray", None)
+            # debug_image(template_data.template, "template", None)
+            # debug_image(img_crit_rgb, "brg")
             loc = np.where((res >= threshold) & (res != float('inf')))
-            red_mask = np.zeros(img_gray.shape[:2], np.uint8)
             for pt in zip(*loc[::-1]):
                 confidence = res[pt[1], pt[0]]
-                midx = pt[0] + int(round(template_data.width / 2))
-                midy = pt[1] + int(round(template_data.height / 2))
-                mask_point = red_mask[midy, midx]
-                # New match
-                if mask_point == 0:
-                    red_mask[pt[1]:pt[1] + template_data.height, pt[0]:pt[0] + template_data.width] = mask_num
-                    abilities_found[mask_num] = KillFeedAbility(ability=ability, point=pt, confidence=confidence,
-                                                                template_data=template_data)
-                    mask_num += 1
-                # Not new but better match
-                elif abilities_found[mask_point].confidence < confidence:
-                    abilities_found[mask_point].confidence = confidence
-                    abilities_found[mask_point].point = pt
-        return abilities_found.values()
+                if confidence > threshold:
+                    if ability == Ability.CRITICAL_HIT:
+                        self.critical_hit = True
+                    else:
+                        self.ability = ability
 
     def __hash__(self):
         return hash(f"{self.hero_left}{self.hero_right}{self.action}")
@@ -163,10 +194,10 @@ class KillFeedAnalyzer:
     }
 
     def _if_debug_print(self):
-        return self.debug and self.i % 3 == 0
+        return self.debug and self.i % 60 == 0
 
     def __init__(self, api_client, act_instantly=False, show_debug_img=False, debug=False, print_killfeed=True,
-                 combo_cutoff=2, threshold=0.78, thread_count=7):
+                 combo_cutoff=2, threshold=0.73, thread_count=6):
         self.color = (0, 255, 0)
         self.hero_width = 66
         self.hero_height = 46
@@ -186,34 +217,52 @@ class KillFeedAnalyzer:
         self.thread_count = thread_count
         self.tpool = ThreadPool(processes=thread_count)
         self.i = 0
+        self.width = 550
+        self.height = 600
 
     def start_analyzer(self):
         with mss() as sct:
             mon = sct.monitors[1]
-            w = 550
-            h = 500
             monitor = {
                 "top": mon["top"] + 15,
-                "left": mon["left"] + 3820 - w,
-                "width": w,
-                "height": h,
+                "left": mon["left"] + 3820 - self.width,
+                "width": self.width,
+                "height": self.height,
                 "mon": 1,
             }
-            while True:
-                self.i += 1
-                if self.debug:
+            img = None
+            fps = '-'
+            fps_counter = 0
+            fps_start = time()
+            try:
+                while True:
+                    self.i += 1
                     start = time()
-                filename = None
-                #filename = "test_images/sextuple.png"
-                if not filename:
-                    img = np.array(sct.grab(monitor))
-                else:
-                    img = cv2.imread(filename)
-                    img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
-                self.update_killfeed(img)
-                self.analyze_killfeed()
-                if self._if_debug_print():
-                    logger.debug(f"Analyzing loop took {time()-start} seconds")
+                    filename = None
+                    filename = "test_images/spectate_mode.png"
+                    if not filename:
+                        img = np.array(sct.grab(monitor))
+                    else:
+                        img = cv2.imread(filename)
+                        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+                    self.update_killfeed(img)
+                    self.analyze_killfeed()
+                    if self._if_debug_print():
+                        logger.debug(f"Analyzing loop took {time()-start} seconds")
+                    if self.show_debug_img:
+                        fps_counter += 1
+                        if time() - fps_start > 1:
+                            fps = f'{fps_counter}'
+                            fps_counter = 0
+                            fps_start = time()
+                        cv2.putText(img, fps, (30, 30), self.font, 1, (0, 255, 0), 1, cv2.LINE_AA)
+                        cv2.imshow("Matched image", img)
+                        cv2.waitKey(1)
+
+            except Exception as e:
+                traceback.print_exc()
+                logger.error(e)
+                cv2.imshow("last_image", img)
 
     def update_killfeed(self, img):
         start = time()
@@ -222,6 +271,8 @@ class KillFeedAnalyzer:
             logger.debug(f"Analyzing image took {time() - start} seconds")
         timestamp = time()
         for kfl in killfeed_lines:
+            if self.show_debug_img:
+                kfl.draw_debug_line(img, self.font)
             if kfl not in self.killfeed:
                 self.killfeed.append(kfl)
                 if kfl.action == Action.KILLED:
@@ -232,23 +283,24 @@ class KillFeedAnalyzer:
 
         while self.killfeed and timestamp - self.killfeed[0].timestamp > 10:
             self.killfeed.popleft()
-        if self.show_debug_img:
-            cv2.imshow("Matched image", img)
-            cv2.waitKey(1)
 
     def analyze_image(self, img_rgb):
-        start = time()
         cpy = img_rgb.copy()
         img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
         gray_copy = img_gray.copy()
         img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2HSV)
-        red_mask = cv2.inRange(img_hsv, (170, 175, 220), (180, 205, 240))
-        blue_mask = cv2.inRange(img_hsv, (85, 180, 205), (105, 235, 250))
+        #  ORIGINAL
+        #  red_mask = cv2.inRange(img_hsv, (170, 175, 220), (180, 205, 240))
+        #  blue_mask = cv2.inRange(img_hsv, (85, 180, 205), (105, 235, 250))
+        red_mask = cv2.inRange(img_hsv, (130, 130, 210), (180, 210, 250))
+        blue_mask = cv2.inRange(img_hsv, (80, 175, 200), (110, 255, 255))
         # Used to find the nearly constant color stripes next to hero icons to make the analyzed img smaller
         kf_stripes = img_gray.copy()
         kf_stripes[(blue_mask > 0)] = 255
         kf_stripes[(red_mask > 0)] = 100
         kf_stripes[(blue_mask == 0) & (red_mask == 0)] = 0
+        if self.show_debug_img:
+            debug_image(kf_stripes, wait=None)
         visited: Set[Tuple[int, int]] = set()
         lines: Dict[Tuple[int, int], Tuple[int, Team]] = dict()
         dem_spots = {(i[1], i[0]): None for i in np.argwhere(kf_stripes > 0)}
@@ -259,12 +311,22 @@ class KillFeedAnalyzer:
             temp_y = y+1
             line_end = None
             visited.add((x, y))
-            while (x, temp_y) in dem_spots and (x, temp_y) not in visited:
+            skips = 4
+            color = Team.BLUE if kf_stripes[y][x] == 255 else Team.RED
+
+            def skip_possible(_y):
+                possible = False
+                for _temp_y in range(_y + 1, _y + skips):
+                    if (x, _temp_y) in dem_spots:
+                        possible = True
+                        break
+                return possible
+
+            while (x, temp_y) in dem_spots or skip_possible(temp_y) and (x, temp_y) not in visited:
                 visited.add((x, temp_y))
                 line_end = temp_y
                 temp_y += 1
             if line_end and line_end - y > 30:
-                color = Team.BLUE if kf_stripes[y][x] == 255 else Team.RED
                 lines[(x, line_start)] = line_end, color
 
         merged_lines: Dict[Tuple[int, int], Tuple[int, Team]] = dict()
@@ -287,28 +349,32 @@ class KillFeedAnalyzer:
             for (start2_x, start2_y), (end2_y, color2) in merged_lines.items():
                 if (start1_x, start1_y) == (start2_x, start2_y):
                     continue
-                if start1_x - start2_x > 40 and start1_y - 10 < start2_y and end2_y < end1_y + 10:
+                if start1_x - start2_x > 33 and start1_y - 20 < start2_y and end2_y < end1_y + 30:
                     if start1_x < start2_x:
-                        pairs[(start1_x, start1_y - 10, start2_x, end1_y + 10, color1, color2)] = None
+                        pairs[(start1_x, start1_y - 20, start2_x, end1_y + 20, color1, color2)] = None
                     else:
-                        pairs[start2_x, start1_y - 10, start1_x, end1_y + 10, color2, color1] = None
+                        pairs[start2_x, start1_y - 20, start1_x, end1_y + 20, color2, color1] = None
                     break
 
         timestamp = time()
+        debug_copy = None
+        if self.show_debug_img:
+            debug_copy = cpy.copy()
         for i, pair in enumerate(pairs):
-            left_hero_bgr = cpy[pair[1]:pair[3], pair[0] - 80:pair[0] + 5]
-            left_hero_gray = gray_copy[pair[1]:pair[3], pair[0] - 80:pair[0] + 5]
-            right_hero_bgr = cpy[pair[1]:pair[3], pair[2] - 5:pair[2] + 80]
-            right_hero_gray = gray_copy[pair[1]:pair[3], pair[2] - 5:pair[2] + 80]
-            ability_bgr = cpy[pair[1]:pair[3], pair[0]-10:pair[2]+10]
-            kfl = KillFeedLine(threshold=self.threshold, timestamp=timestamp, hero_left_bgr=left_hero_bgr,
-                               hero_left_gray=left_hero_gray, hero_right_bgr=right_hero_bgr,
-                               hero_right_gray=right_hero_gray, ability_bgr=ability_bgr, team_left=pair[4],
-                               team_right=pair[5])
-            killfeed_lines.append(kfl)
+            kfl = KillFeedLine(threshold=self.threshold, timestamp=timestamp,
+                               hero_left_area=(pair[1], pair[3], pair[0] - 160, pair[0] + 5),
+                               hero_right_area=(pair[1], pair[3], pair[2] - 5, pair[2] + 160),
+                               ability_area=(pair[1], pair[3], pair[0]-10, pair[2]+10),
+                               bgr_img=cpy, gray_img=gray_copy, team_left=pair[4], team_right=pair[5])
+            if kfl.is_valid():
+                killfeed_lines.append(kfl)
+                if self.show_debug_img:
+                    kfl.draw_search_area(debug_copy, self.font)
+
+        if self.show_debug_img:
+            cv2.imshow("test123", debug_copy)
 
         threads: List[Tuple[ApplyResult, KillFeedLine]] = list()
-        start_find = time()
         for kfl in killfeed_lines:
             res = self.tpool.apply_async(kfl.analyze)
             threads.append((res, kfl))
@@ -317,88 +383,6 @@ class KillFeedAnalyzer:
                 heroes_found.append(kfl)
         heroes_found.sort(reverse=True, key=lambda _kfl: _kfl.hero_left.point[1])
         return heroes_found
-
-    def find_heroes(self, img_rgb, img_gray, threshold) -> Optional[KillFeedHero]:
-        for hero, template_data in h_icons.items():
-            res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED, mask=template_data.mask)
-            loc = np.where((res >= threshold) & (res != float('inf')))
-            for pt in zip(*loc[::-1]):
-                confidence = res[pt[1], pt[0]]
-                hero_found = KillFeedHero(hero=hero, point=pt, confidence=confidence, template_data=template_data)
-                hero_found.team = self.get_team_color(hero_found, img_rgb)
-                return hero_found
-
-        return None
-
-    def find_abilities(self, source_img, possible_abilities: List[Tuple[Ability, TemplateData]],
-                       threshold=0.70) -> Iterable[KillFeedAbility]:
-
-        img_rgb = source_img.copy()
-        # Make the picture black & Red. Everything close to red is red. Rest is black. Increases crit detection
-        img_hsv = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2HSV)
-        red_mask1 = cv2.inRange(img_hsv, (0, 70, 140), (10, 255, 255))
-        red_mask2 = cv2.inRange(img_hsv, (170, 70, 140), (180, 255, 255))
-        red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-        white_mask = cv2.inRange(img_hsv, (0, 0, 230), (255, 25, 255))
-        img_rgb[red_mask > 0] = (0, 0, 255, 255)
-        img_rgb[white_mask > 0] = (255, 255, 255, 255)
-        img_rgb[(red_mask == 0) & (white_mask == 0)] = (0, 0, 0, 255)
-
-        img_gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
-        #self.debug_image(img_rgb, "rgb", None)
-        #self.debug_image(img_gray, "gray")
-        abilities_found: Dict[int, KillFeedAbility] = dict()
-        mask_num = 0
-        for ability, template_data in possible_abilities:
-            if template_data.width > img_gray.shape[1] or template_data.height > img_gray.shape[0]:
-                logger.error(f"ERRROR!!! img shape: {img_gray.shape}  ability shape: {template_data.template.shape}")
-                continue
-            res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED)
-            #self.debug_image(img_crit_gray, "gray", None)
-            #self.debug_image(template_data.template, "template", None)
-            #self.debug_image(img_crit_rgb, "brg")
-            # TODO All the below. I don't remember how it works
-            loc = np.where((res >= threshold) & (res != float('inf')))
-            red_mask = np.zeros(img_gray.shape[:2], np.uint8)
-            for pt in zip(*loc[::-1]):
-                confidence = res[pt[1], pt[0]]
-                midx = pt[0] + int(round(template_data.width / 2))
-                midy = pt[1] + int(round(template_data.height / 2))
-                mask_point = red_mask[midy, midx]
-                # New match
-                if mask_point == 0:
-                    red_mask[pt[1]:pt[1] + template_data.height, pt[0]:pt[0] + template_data.width] = mask_num
-                    abilities_found[mask_num] = KillFeedAbility(ability=ability, point=pt, confidence=confidence,
-                                                                template_data=template_data)
-                    mask_num += 1
-                # Not new but better match
-                elif abilities_found[mask_point].confidence < confidence:
-                    abilities_found[mask_point].confidence = confidence
-                    abilities_found[mask_point].point = pt
-        return abilities_found.values()
-
-    def get_team_color(self, kf_item: KillFeedHero, img_rbg) -> Team:
-        width = kf_item.template_data.width
-        height = kf_item.template_data.height
-        cropped = img_rbg[kf_item.point[1] - 2: kf_item.point[1] + height + 2,
-                          kf_item.point[0] - 2:kf_item.point[0] + width + 2]
-        cropped[2:-2, 2:-2] = 0
-        w, h = cropped.shape[:2]
-        count = w * 4 + (h - 4) * 4
-        bgr = np.array([0, 0, 0, 0])
-        for row in cropped:
-            for i in row:
-                if i.any():
-                    bgr += i
-        average_color = bgr / count
-        if average_color[1] < average_color[0] > average_color[2]:
-            return Team.BLUE
-        if average_color[1] < average_color[2] > average_color[0]:
-            return Team.RED
-        return Team.UNKNOWN
-
-    def _chunkify_list(self, some_list, chunk_count):
-        return [some_list[i::chunk_count] for i in range(chunk_count)]
 
     def analyze_killfeed(self):
         kfl: KillFeedLine
@@ -428,8 +412,8 @@ class KillFeedAnalyzer:
     def update_multikillcutoff(self):
         self.killfeed_clear_time = time() + self.combo_cutoff
 
-    def debug_image(self, img, text="debug", wait: Optional[int] = 0):
-        if not self.disable_debug_images:
-            cv2.imshow(text, img)
-            if wait is not None:
-                cv2.waitKey(wait)
+
+def debug_image(img, text="debug", wait: Optional[int] = 0):
+    cv2.imshow(text, img)
+    if wait is not None:
+        cv2.waitKey(wait)
