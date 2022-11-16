@@ -62,17 +62,14 @@ class KillFeedLine:
         for kf_item in [self.hero_left, self.hero_right]:
             if kf_item is None:
                 continue
-            if kf_item == self.hero_left:
-                point = kf_item.point[0] + self.hero_left_area[2], kf_item.point[1] + self.hero_left_area[0]
-            else:
-                point = kf_item.point[0] + self.hero_right_area[2], kf_item.point[1] + self.hero_right_area[0]
+            point = kf_item.point[0], kf_item.point[1]
             text_point = (point[0], point[1] + hero_height + 10)
             text = '{} {:.2f}'.format(kf_item.hero.value, kf_item.confidence)
             cv2.putText(img, text, text_point, font, 0.8, (0, 255, 0), 1, cv2.LINE_AA)
             cv2.rectangle(img, (point[0], point[1]), (point[0] + hero_width, point[1] + hero_height), color, 2)
 
-    def draw_search_area(self, img, font):
-        color = (255,0,0)
+    def draw_search_area(self, img):
+        color = (255, 0, 0)
         cv2.rectangle(img, (self.hero_left_area[2], self.hero_left_area[0]),
                       (self.hero_left_area[3], self.hero_left_area[1]), color, 2)
         cv2.rectangle(img, (self.hero_right_area[2], self.hero_right_area[0]),
@@ -86,20 +83,22 @@ class KillFeedLine:
         return self.hero_left and self.hero_right
 
     def determine_heroes(self):
-        self.hero_left = self._find_hero(self.hero_left_gray)
+        self.hero_left = self._find_hero(self.hero_left_gray, self.hero_left_area)
         if self.hero_left:
             self.hero_left.team = self.team_left
-            self.hero_right = self._find_hero(self.hero_right_gray)
-            if self.hero_right:
-                self.hero_right.team = self.team_right
+            if self.hero_left.hero == Hero.MERCY or self.team_left != self.team_right:
+                self.hero_right = self._find_hero(self.hero_right_gray, self.hero_right_area)
+                if self.hero_right:
+                    self.hero_right.team = self.team_right
 
-    def _find_hero(self, img_gray) -> Optional[KillFeedHero]:
+    def _find_hero(self, img_gray, area) -> Optional[KillFeedHero]:
         for hero, template_data in h_icons.items():
             res = cv2.matchTemplate(img_gray, template_data.template, cv2.TM_CCOEFF_NORMED, mask=template_data.mask)
             loc = np.where((res >= self.threshold) & (res != float('inf')))
             for pt in zip(*loc[::-1]):
                 confidence = res[pt[1], pt[0]]
-                hero_found = KillFeedHero(hero=hero, point=pt, confidence=confidence, template_data=template_data)
+                point = (pt[0] + area[2], pt[1] + area[0])
+                hero_found = KillFeedHero(hero=hero, point=point, confidence=confidence, template_data=template_data)
                 return hero_found
 
         return None
@@ -113,7 +112,7 @@ class KillFeedLine:
                 self.ability = a.ability
 
     def determine_ability(self, possible_abilities: List[Tuple[Ability, TemplateData]],
-                          threshold=0.70) -> Iterable[KillFeedAbility]:
+                          threshold=0.70):
 
         img_rgb = self.ability_bgr.copy()
         # Make the picture black & Red. Everything close to red is red. Rest is black. Increases crit detection
@@ -239,7 +238,7 @@ class KillFeedAnalyzer:
                     self.i += 1
                     start = time()
                     filename = None
-                    filename = "test_images/spectate_mode.png"
+                    filename = "test_images/sextuple.png"
                     if not filename:
                         img = np.array(sct.grab(monitor))
                     else:
@@ -342,7 +341,6 @@ class KillFeedAnalyzer:
                         todels.add((temp_x, temp_y))
                         break
 
-        heroes_found: List[KillFeedLine] = list()
         pairs: Dict[Tuple[int, int, int, int, Team, Team]] = dict()
         killfeed_lines: List[KillFeedLine] = list()
         for (start1_x, start1_y), (end1_y, color1) in merged_lines.items():
@@ -351,16 +349,16 @@ class KillFeedAnalyzer:
                     continue
                 if start1_x - start2_x > 33 and start1_y - 20 < start2_y and end2_y < end1_y + 30:
                     if start1_x < start2_x:
-                        pairs[(start1_x, start1_y - 20, start2_x, end1_y + 20, color1, color2)] = None
+                        pairs[(start1_x, max(0, start1_y - 20), start2_x, end1_y + 20, color1, color2)] = None
                     else:
-                        pairs[start2_x, start1_y - 20, start1_x, end1_y + 20, color2, color1] = None
+                        pairs[start2_x, max(0, start1_y - 20), start1_x, end1_y + 20, color2, color1] = None
                     break
 
-        timestamp = time()
         debug_copy = None
         if self.show_debug_img:
             debug_copy = cpy.copy()
         for i, pair in enumerate(pairs):
+            timestamp = time()
             kfl = KillFeedLine(threshold=self.threshold, timestamp=timestamp,
                                hero_left_area=(pair[1], pair[3], pair[0] - 160, pair[0] + 5),
                                hero_right_area=(pair[1], pair[3], pair[2] - 5, pair[2] + 160),
@@ -369,7 +367,7 @@ class KillFeedAnalyzer:
             if kfl.is_valid():
                 killfeed_lines.append(kfl)
                 if self.show_debug_img:
-                    kfl.draw_search_area(debug_copy, self.font)
+                    kfl.draw_search_area(debug_copy)
 
         if self.show_debug_img:
             cv2.imshow("test123", debug_copy)
@@ -378,9 +376,11 @@ class KillFeedAnalyzer:
         for kfl in killfeed_lines:
             res = self.tpool.apply_async(kfl.analyze)
             threads.append((res, kfl))
+        heroes_found_sorted_set: Dict[KillFeedLine, None] = dict()
         for i, (res, kfl) in enumerate(threads):
             if res.get():
-                heroes_found.append(kfl)
+                heroes_found_sorted_set[kfl] = None
+        heroes_found: List[KillFeedLine] = list(heroes_found_sorted_set.keys())
         heroes_found.sort(reverse=True, key=lambda _kfl: _kfl.hero_left.point[1])
         return heroes_found
 
