@@ -59,6 +59,7 @@ class KillFeedAnalyzerTestCase(unittest.TestCase):
                                (Team.RED, Hero.MOIRA, None, False, Team.BLUE, Hero.ANA)]),
         ("two_kills.png", [(Team.RED, Hero.MOIRA, None, False, Team.BLUE, Hero.HANZO),
                            (Team.BLUE, Hero.SOJOURN, Ability.RAILGUN, True, Team.RED, Hero.ORISA)]),
+        ("two_kills_unrecognisable_hero.png", [(Team.RED, Hero.MOIRA, None, False, Team.BLUE, Hero.ANA)]),
         )
     @ddt.unpack
     def test_image_analyzing(self, img_name, expected_killfeed):

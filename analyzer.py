@@ -90,6 +90,8 @@ class KillFeedLine:
                 self.hero_right = self._find_hero(self.hero_right_gray, self.hero_right_area)
                 if self.hero_right:
                     self.hero_right.team = self.team_right
+                    if self.hero_left.team == self.hero_right.team:
+                        self.action = Action.RESSED
 
     def _find_hero(self, img_gray, area) -> Optional[KillFeedHero]:
         for hero, template_data in h_icons.items():
@@ -218,6 +220,10 @@ class KillFeedAnalyzer:
         self.i = 0
         self.width = 550
         self.height = 600
+
+    def __del__(self):
+        self.tpool.close()
+        self.tpool.terminate()
 
     def start_analyzer(self):
         with mss() as sct:
