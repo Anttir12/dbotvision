@@ -244,7 +244,7 @@ class KillFeedAnalyzer:
                     self.i += 1
                     start = time()
                     filename = None
-                    filename = "test_images/sextuple.png"
+                    #filename = "test_images/sextuple.png"
                     if not filename:
                         img = np.array(sct.grab(monitor))
                     else:
