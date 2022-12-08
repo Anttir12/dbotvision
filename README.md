@@ -1,12 +1,8 @@
+This uses mss to take a screenshot of top right corner and opencv to analyze it
+(only works with 5120x1440 monitor with normal colors e.g. no colorblind mode in overwatch.
+These should be quite easy to change in code if needed). It searches for the read and blue
+colors to find the "lines" next to killfeed icons. After finding those it uses template
+matching to find which hero killed (or ressed) which. Finally, it uses template matching to 
+find out what ability was used.
 
-To get opencv in venv. Install it system-wide first.
-
-`sudo apt install libopencv-dev python3-opencv`
-
-test it works (not in venv):
-`python3 -c "import cv2; print(cv2.__version__)"`
-
-(note that version and path might vary depending on your system etc.)
-Then copy /usr/lib/python3/dist-packages/cv2.cpython-38-x86_64-linux-gnu.so
-to your venv
-<project-root>/venv/lib/python3.8/site-packages/.
+This data is then sent to dbot which can control how to react to different events.
